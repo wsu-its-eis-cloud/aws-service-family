@@ -33,16 +33,16 @@ param(
     [string] $environmentTagName  = "environment",
 
     [Alias("elb")]
-    [bool] $loadBalancer = $true,
+    [bool] $loadBalancer = $false,
 
     [Alias("app")]
     [string] $applicationType = "web",
 
     [Alias("ecr")]
-    [bool] $containerRepository = $true,
+    [bool] $containerRepository = $false,
 
     [Alias("ecs")]
-    [bool] $containerCluster = $true,
+    [bool] $containerCluster = $false,
 
     [Alias("tr")]
     [switch] $transcribe = $true,
@@ -666,11 +666,11 @@ echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/e
     $asAutoScalingGroupParams = @{ 
         'AutoScalingGroupName'             = ("EC2ContainerService-{0}-EcsInstanceAsg-{1}" -f $serviceFamily, [DateTimeOffset]::Now.ToUnixTimeSeconds());
         'LaunchConfigurationName'          = $asLaunchConfiguration.LaunchConfigurationName;
-        'MinSize'                          = 2;
+        'MinSize'                          = 1;
         'MaxSize'                          = 2;
         'AvailabilityZone'                 = $zones;
         'DefaultCooldown'                  = 300;
-        'DesiredCapacity'                  = 2;
+        'DesiredCapacity'                  = 1;
         'NewInstancesProtectedFromScaleIn' = $true;
         'Tag'                              = $nameTag,$serviceTag,$managementTag,$environmentTag;
         'TargetGroupARNs'                  = $elbTargetGroup.TargetGroupArn;
@@ -713,7 +713,19 @@ echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/e
     $clusterSetting = New-Object -TypeName Amazon.ECS.Model.ClusterSetting
     $clusterSetting.Name = "containerInsights"
     $clusterSetting.Value = "enabled"
-    $ecs = New-ECSCluster -ClusterName $serviceFamily -Tag $nameTag,$serviceTag,$managementTag,$environmentTag -Setting $clusterSetting -CapacityProvider $ecsCapacityProvider.Name -DefaultCapacityProviderStrategy $clusterStrategyItem @session
+
+    $clusterName = $serviceFamily
+    $clusters = Get-ECSClusterList @session
+    if($clusters) {
+        foreach($cluster in $clusters) {
+            if($cluster.Split("/")[1] -eq $serviceFamily) {
+                $clusterName = ("{0}-{1}" -f $clusterName, [DateTimeOffset]::Now.ToUnixTimeSeconds())
+                Write-Output "`t`t`t Warning >>>>>>> Duplicate ECS Cluster name detected, adding time string"
+            }
+        }
+    }
+
+    $ecs = New-ECSCluster -ClusterName $clusterName -Tag $nameTag,$serviceTag,$managementTag,$environmentTag -Setting $clusterSetting -CapacityProvider $ecsCapacityProvider.Name -DefaultCapacityProviderStrategy $clusterStrategyItem @session
     Start-Sleep -Seconds 5
     $ecs
     $ecs = Get-ECSClusterDetail -Cluster $ecs.ClusterArn @session
@@ -887,5 +899,12 @@ if($transcribe) {
     Stop-Transcript
     Start-Sleep 2
 }
+
+# Build account baseline packet
+$packetName = ("ServiceProvisionedPacket-{0}-{1}.zip" -f $serviceFamily, [DateTimeOffset]::Now.ToUnixTimeSeconds())
+Get-ChildItem -Exclude _*,.*,*.md | Compress-Archive -DestinationPath $packetName -Force
+rm *.transcript
+rm *.pem
+rm *.fingerprint
 
 return $validationPassed
