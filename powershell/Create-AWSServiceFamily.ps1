@@ -36,10 +36,10 @@ param(
     [bool] $loadBalancer = $false,
 
     [Alias("app")]
-    [string] $applicationType = "web",
+    [string] $serviceType = "",
 
     [Alias("ecr")]
-    [bool] $containerRepository = $false,
+    [bool] $containerRegistry = $false,
 
     [Alias("ecs")]
     [bool] $containerCluster = $false,
@@ -147,15 +147,15 @@ if ($help) {
     Write-Output ("`t ")
     Write-Output ("`t containerRepository")
     Write-Output ("`t     Indicates whether to provision a container repository for the environment.")
-    Write-Output ("`t     Default: {0}" -f $containerRepository)
+    Write-Output ("`t     Default: {0}" -f $containerRegistry)
     Write-Output ("`t     Alias: ecr")
-    Write-Output ("`t     Example: .\{0}.ps1 -containerRepository {1}" -f $MyInvocation.MyCommand.Name, $containerRepository)
-    Write-Output ("`t     Example: .\{0}.ps1 -ecr {1}" -f $MyInvocation.MyCommand.Name, $containerRepository)
+    Write-Output ("`t     Example: .\{0}.ps1 -containerRepository {1}" -f $MyInvocation.MyCommand.Name, $containerRegistry)
+    Write-Output ("`t     Example: .\{0}.ps1 -ecr {1}" -f $MyInvocation.MyCommand.Name, $containerRegistry)
 
     Write-Output ("`t ")
     Write-Output ("`t containerCluster")
     Write-Output ("`t     Indicates whether to provision a container repository for the environment.")
-    Write-Output ("`t     Default: {0}" -f $containerRepository)
+    Write-Output ("`t     Default: {0}" -f $containerRegistry)
     Write-Output ("`t     Alias: ecr")
     Write-Output ("`t     Example: .\{0}.ps1 -containerRepository {1}" -f $MyInvocation.MyCommand.Name, $containerCluster)
     Write-Output ("`t     Example: .\{0}.ps1 -ecs {1}" -f $MyInvocation.MyCommand.Name, $containerCluster)
@@ -185,12 +185,12 @@ if ($help) {
     Write-Output ("`t     Example: .\{0}.ps1 -elb {1}" -f $MyInvocation.MyCommand.Name, $loadBalancer)
 
     Write-Output ("`t ")
-    Write-Output ("`t containerRepository")
+    Write-Output ("`t containerRegistry")
     Write-Output ("`t     Indicates whether to build a generic container repository for the service environment")
-    Write-Output ("`t     Default: {0}" -f $containerRepository)
+    Write-Output ("`t     Default: {0}" -f $containerRegistry)
     Write-Output ("`t     Alias: ecr")
-    Write-Output ("`t     Example: .\{0}.ps1 -loadBalancer {1}" -f $MyInvocation.MyCommand.Name, $containerRepository)
-    Write-Output ("`t     Example: .\{0}.ps1 -elb {1}" -f $MyInvocation.MyCommand.Name, $containerRepository)
+    Write-Output ("`t     Example: .\{0}.ps1 -loadBalancer {1}" -f $MyInvocation.MyCommand.Name, $containerRegistry)
+    Write-Output ("`t     Example: .\{0}.ps1 -elb {1}" -f $MyInvocation.MyCommand.Name, $containerRegistry)
 
     Write-Output ("`t ")
     Write-Output ("`t containerCluster")
@@ -201,12 +201,12 @@ if ($help) {
     Write-Output ("`t     Example: .\{0}.ps1 -elb {1}" -f $MyInvocation.MyCommand.Name, $containerCluster)
 
     Write-Output ("`t ")
-    Write-Output ("`t applicationType")
-    Write-Output ("`t     Makes minor customizations for supported application types.  Supported type(s) is: web")
-    Write-Output ("`t     Default: {0}" -f $applicationType)
+    Write-Output ("`t serviceType")
+    Write-Output ("`t     Configures service based on matching rules in IpPermissions and other csv's.")
+    Write-Output ("`t     Default: {0}" -f $serviceType)
     Write-Output ("`t     Alias: app")
-    Write-Output ("`t     Example: .\{0}.ps1 -applicationType {1}" -f $MyInvocation.MyCommand.Name, $applicationType)
-    Write-Output ("`t     Example: .\{0}.ps1 -app {1}" -f $MyInvocation.MyCommand.Name, $applicationType)
+    Write-Output ("`t     Example: .\{0}.ps1 -serviceType {1}" -f $MyInvocation.MyCommand.Name, $serviceType)
+    Write-Output ("`t     Example: .\{0}.ps1 -app {1}" -f $MyInvocation.MyCommand.Name, $serviceType)
 
     Write-Output ("`t ")
     Write-Output ("`t transcribe")
@@ -283,6 +283,7 @@ $managementMode
 Write-Output ""
 Write-Output "`t Searching for conflicting service family VPCs."
 Write-Output "`t Building tag filters and retrieving tags..."
+
 $filters = @()
 $filter = New-Object -TypeName Amazon.EC2.Model.Filter
 $filter.Name = "resource-type"
@@ -323,6 +324,7 @@ $environmentTag
 Write-Output ""
 Write-Output "`t Begin building and configuring the virtual private cloud."
 Write-Output "`t Creating VPC..."
+
 $vpc = New-EC2VPC -CidrBlock $cidrBlock -InstanceTenancy $instanceTenancy @session
 $vpc
 
@@ -421,60 +423,111 @@ foreach($routeTable in $routeTables) {
 Write-Output "`t VPC built, configured, and tagged."
 Write-Output ""
 
-# Creating security group for load balancer
+# Revoke default rules from default security group of service VPC (CIS/PCI/AWS best practice)
+Write-Output "`t Remove rules from default security group..."
 Write-Output ""
-Write-Output "`t Begin building and configuring the ELB security group."
-Write-Output "`t Creating load balancer security group..."
-$sg = New-EC2SecurityGroup -GroupName $serviceFamily -Description $serviceFamily -VpcId $vpc.VpcId @session
-$sg
+$filters = @()
+$filter = New-Object -TypeName Amazon.EC2.Model.Filter
+$filter.Name = "vpc-id"
+$filter.Values.Add($vpc.VpcId)
+$filters = $filters + $filter
 
-Write-Output "`t Defining IP ranges and default egress rules..."
-$ipRange = New-Object -TypeName Amazon.EC2.Model.IpRange
-$ipRange.CidrIp = "0.0.0.0/0"
-#$ipRange.Description = $null   # Do not set description or it will not match default egress rule.  
-                                # Powershell differentiates null and parameter not set. 
-                                # https://stackoverflow.com/questions/28697349/how-do-i-assign-a-null-value-to-a-variable-in-powershell
-$ipRange
+$filter = New-Object -TypeName Amazon.EC2.Model.Filter
+$filter.Name = "group-name"
+$filter.Values.Add("default")
+$filters = $filters + $filter
 
-Write-Output "`t Building security group ingress rules..."
-$httpPermission = New-Object -TypeName Amazon.EC2.Model.IpPermission
-$httpPermission.FromPort = 80
-$httpPermission.IpProtocol = "tcp"
-$httpPermission.Ipv4Ranges = $ipRange
-$httpPermission.ToPort = 80
-$httpPermission
+$defaultSg = Get-EC2SecurityGroup -Filter $filters @session
+Revoke-EC2SecurityGroupIngress -GroupId $defaultSg.GroupId -IpPermission $defaultSg.IpPermissions @session
+Revoke-EC2SecurityGroupEgress -GroupId $defaultSg.GroupId -IpPermission $defaultSg.IpPermissionsEgress @session
 
-$httpsPermission = New-Object -TypeName Amazon.EC2.Model.IpPermission
-$httpsPermission.FromPort = 443
-$httpsPermission.IpProtocol = "tcp"
-$httpsPermission.Ipv4Ranges = $ipRange
-$httpsPermission.ToPort = 443
-$httpsPermission
+# Creating a non-default security group for the service
+Write-Output ""
+Write-Output "`t Begin building and configuring security groups."
+Write-Output "`t Creating service family security group..."
+$serviceSgId = New-EC2SecurityGroup -GroupName $serviceFamily -Description $serviceFamily -VpcId $vpc.VpcId @session
+$serviceSgId
+Start-Sleep 5
 
-Write-Output "`t Applying ingress rules..."
-Grant-EC2SecurityGroupIngress -GroupId $sg -IpPermission $httpPermission,$httpsPermission @session
+# Retrieve newly created service family security group
+$filters = @()
+$filter = New-Object -TypeName Amazon.EC2.Model.Filter
+$filter.Name = "vpc-id"
+$filter.Values.Add($vpc.VpcId)
+$filters = $filters + $filter
 
-# If a container cluster is built, we must leave outbound egress to allow for EC2 instances to register with global ECS service broker
+$filter = New-Object -TypeName Amazon.EC2.Model.Filter
+$filter.Name = "group-name"
+$filter.Values.Add($serviceFamily)
+$filters = $filters + $filter
+$serviceSg = Get-EC2SecurityGroup -Filter $filters @session
+
+# Remove default egress rules from service family sg, except when building a container cluster which must register with global ECS service broker
 if($containerCluster -eq $false) {
     Write-Output "`t Revoking default egress rules..."
-    $outPermission = New-Object -TypeName Amazon.EC2.Model.IpPermission
-    $outPermission.FromPort = 0
-    $outPermission.IpProtocol = "-1"
-    $outPermission.Ipv4Ranges = $ipRange
-    $outPermission.ToPort = 0
-    $outPermission
-
-    Revoke-EC2SecurityGroupEgress -GroupId $sg -IpPermission $outPermission @session
+    Revoke-EC2SecurityGroupEgress -GroupId $serviceSgId -IpPermission $serviceSg.IpPermissionsEgress @session
 }
 
-Write-Output "`t Applying new security group egress rules..."
-Grant-EC2SecurityGroupEgress -GroupId $sg -IpPermission $httpPermission,$httpsPermission @session
+# Check if application name is specified
+if($serviceType -ne "") {
+    [Amazon.EC2.Model.IpPermission[]] $ipPermissionsIngress = @()
+    [Amazon.EC2.Model.IpPermission[]] $ipPermissionsEgress = @()
+
+    Import-Csv ApplicationsDefaultSgRules_IpPermissions.csv | ForEach-Object {
+        $rule = $_
+    
+        if($serviceType -eq $rule.ServiceType) {
+            $ipPermission = New-Object -TypeName Amazon.EC2.Model.IpPermission
+            [Amazon.EC2.Model.IpRange[]] $ipRanges = @()
+
+            if($rule.Ipv4Ranges -ne "") {
+                foreach($range in $rule.Ipv4Ranges.Split(",")) {
+                    $ipRange = New-Object -TypeName Amazon.EC2.Model.IpRange
+                    $ipRange.CidrIp = $range
+                    $ipRanges = $ipRanges + $ipRange
+                }
+                $ipPermission.Ipv4Ranges = $ipRanges
+            } elseif ($rule.Ipv6Ranges -ne "") {
+                foreach($range in $rule.Ipv6Ranges.Split(",")) {
+                    $ipRange = New-Object -TypeName Amazon.EC2.Model.IpRange
+                    $ipRange.CidrIp = $range
+                    $ipRanges = $ipRanges + $ipRange
+                }
+                $ipPermission.Ipv6Ranges = $ipRanges
+            } else {
+                Write-Output ("`t`t Rule {0} {1} contains no IP ranges." -f $rule.Application, $rule.RuleName)
+                continue
+            }
+
+            $ipPermission.FromPort = $rule.FromPort
+            $ipPermission.IpProtocol = $rule.IpProtocol
+            $ipPermission.ToPort = $rule.ToPort
+            $ipPermission
+
+            if($rule.Directionality -eq "Ingress") {
+                $ipPermissionsIngress = $ipPermissionsIngress + $ipPermission
+            } else {
+                $ipPermissionsEgress = $ipPermissionsEgress + $ipPermission
+            }
+        }
+    }
+
+    if($ipPermissionsIngress.Count -gt 0) {
+        Write-Output "`t Applying application ingress rules..."
+        Grant-EC2SecurityGroupIngress -GroupId $serviceSgId -IpPermission $ipPermissionsIngress @session
+    }
+
+    if($ipPermissionsEgress.Count -gt 0) {
+        Write-Output "`t Applying application egress rules..."
+        Grant-EC2SecurityGroupEgress -GroupId $serviceSgId -IpPermission $ipPermissionsEgress @session
+    }
+}
 
 Write-Output "`t Tagging security group..."
-New-EC2Tag -Resource $sg -Tag $nameTag @session
-New-EC2Tag -Resource $sg -Tag $serviceTag @session
-New-EC2Tag -Resource $sg -Tag $managementTag @session
-New-EC2Tag -Resource $sg -Tag $environmentTag @session
+New-EC2Tag -Resource $serviceSgId -Tag $nameTag @session
+New-EC2Tag -Resource $serviceSgId -Tag $serviceTag @session
+New-EC2Tag -Resource $serviceSgId -Tag $managementTag @session
+New-EC2Tag -Resource $serviceSgId -Tag $environmentTag @session
 
 Write-Output "`t Security group created, configured, and tagged."
 Write-Output ""
@@ -484,7 +537,7 @@ if($loadBalancer) {
     Write-Output ""
     Write-Output "`t Begin creation and configuration of load balancer."
     Write-Output "`t Creating elastic load balancer..."
-    $elb = New-ELB2LoadBalancer -IpAddressType ipv4 -Name $serviceFamily -Scheme internet-facing -SecurityGroup $sg -Subnet $subnetList -Tag $nameTag,$serviceTag -Type application @session
+    $elb = New-ELB2LoadBalancer -IpAddressType ipv4 -Name $serviceFamily -Scheme internet-facing -SecurityGroup $serviceSgId -Subnet $subnetList -Tag $nameTag,$serviceTag -Type application @session
     $elb
 
     do{
@@ -499,7 +552,7 @@ if($loadBalancer) {
     Add-ELB2Tag -ResourceArn  $elb.LoadBalancerArn -Tag $managementTag @session
     Add-ELB2Tag -ResourceArn  $elb.LoadBalancerArn -Tag $environmentTag @session
 
-    if($containerCluster -and $applicationType -eq "web") {
+    if($containerCluster -and $serviceType -eq "web") {
         Write-Output "`t Creating web group target..."
         $elbTargetGroupParams = @{ 
             'Name'                       = $serviceFamily;
@@ -656,7 +709,7 @@ echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/e
         'BlockDeviceMapping'         = $blockDeviceMap;
         'IamInstanceProfile'         = $iamInstanceProfile.Arn;
         'InstanceMonitoring_Enabled' = $true;
-        'SecurityGroup'              = $sg;
+        'SecurityGroup'              = $serviceSgId;
         'UserData'                   = $userData;
     }
     New-ASLaunchConfiguration @asLaunchConfigurationParams @session
@@ -747,7 +800,7 @@ echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/e
     Write-Output "`t ECS cluster is active."
 }
 
-if($containerRepository) {
+if($containerRegistry) {
     # Creating the container repository
     Write-Output ""
     Write-Output "`t Begin creation and configuration of elastic container repository."
@@ -815,13 +868,13 @@ if($igwTest.Attachments[0].State -eq "available") {
     Write-Output ("`t`t IGW {0} FAILED" -f $igw.InternetGatewayId)
 }
 
-$sgValidated = $false
-$sgTest = Get-EC2SecurityGroup -GroupId $sg @session
-if($sgTest.VpcId -eq $vpc.VpcId) {
-    Write-Output ("`t`t SG {0} validated" -f $sg)
-    $sgValidated = $true
+$serviceSgIdValidated = $false
+$serviceSgIdTest = Get-EC2SecurityGroup -GroupId $serviceSgId @session
+if($serviceSgIdTest.VpcId -eq $vpc.VpcId) {
+    Write-Output ("`t`t SG {0} validated" -f $serviceSgId)
+    $serviceSgIdValidated = $true
 } else {
-    Write-Output ("`t`t SG {0} FAILED" -f $sg)
+    Write-Output ("`t`t SG {0} FAILED" -f $serviceSgId)
 }
 
 $ecsValidated = $false
@@ -867,7 +920,7 @@ if($loadBalancer) {
     $elbValidated = $true
 }
 
-if($containerRepository) {
+if($containerRegistry) {
     $ecrValidated = $false
 
     try {
@@ -883,7 +936,7 @@ if($containerRepository) {
     $ecrValidated = $true
 }
 
-if($vpcValidated -and (($subnetsValidated | Unique).Count -eq 1 -and $subnetsValidated[0] -eq $true) -and $igwValidated -and $sgValidated -and $ec2KeyValidated -and $ecsValidated -and $elbValidated -and $ecrValidated) {
+if($vpcValidated -and (($subnetsValidated | Unique).Count -eq 1 -and $subnetsValidated[0] -eq $true) -and $igwValidated -and $serviceSgIdValidated -and $ec2KeyValidated -and $ecsValidated -and $elbValidated -and $ecrValidated) {
     $validationPassed = $true
 }
 
