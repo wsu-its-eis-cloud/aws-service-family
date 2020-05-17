@@ -615,14 +615,6 @@ if($containerCluster) {
     Write-Output "`t Begin creation and configuration of EC2 SSH Key Pair."
     Write-Output "`t Checking for conflicting key..."
 
-    if (Test-Path("{0}-ec2Key.fingerprint" -f $serviceFamily)) {
-        rm ("{0}-ec2Key.fingerprint" -f $serviceFamily)
-    }
-
-    if (Test-Path("{0}-ec2Key.pem" -f $serviceFamily)) {
-        rm ("{0}-ec2Key.pem" -f $serviceFamily)
-    }
-
     $ec2Key = $null
     try {
         $ec2Key = Get-EC2KeyPair -KeyName $serviceFamily @session
@@ -631,6 +623,14 @@ if($containerCluster) {
     }
 
     if($ec2Key -eq $null) {
+        if (Test-Path("{0}-ec2Key.fingerprint" -f $serviceFamily)) {
+            rm ("{0}cd-ec2Key.fingerprint" -f $serviceFamily)
+        }
+
+        if (Test-Path("{0}-ec2Key.pem" -f $serviceFamily)) {
+            rm ("{0}-ec2Key.pem" -f $serviceFamily)
+        }
+
         $ec2Key = New-EC2KeyPair -KeyName $serviceFamily @session
         $ec2Key.KeyFingerprint | Out-File -FilePath ("{0}-ec2Key.fingerprint" -f $serviceFamily)
         $ec2Key.KeyMaterial | Out-File -FilePath ("{0}-ec2Key.pem" -f $serviceFamily)
@@ -668,7 +668,7 @@ echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/e
 
     $iamRoleParams = @{ 
         'Path'                       = '/';
-        'RoleName'                   = ("{0}-EcsCluster-{1}" -f $serviceFamily, [DateTimeOffset]::Now.ToUnixTimeSeconds());
+        'RoleName'                   = ("{0}-ecs-cluster-{1}" -f $serviceFamily, [DateTimeOffset]::Now.ToUnixTimeSeconds());
         'AssumeRolePolicyDocument'   = '{"Version":"2008-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}';
         'Tag'                        = $nameTag,$serviceTag,$managementTag,$environmentTag;
     }
@@ -681,9 +681,34 @@ echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/e
         return $false
     }
 
+    # Attach AmazonEC2ContainerServiceforEC2Role policy
     $iamRolePolicyParams = @{ 
         'RoleName'                   = $iamRole.RoleName;
         'PolicyArn'                  = 'arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role';
+    }
+    $iamRolePolicy = Register-IAMRolePolicy @iamRolePolicyParams @session
+    $iamRolePolicy
+
+    # Attach CloudWatchAgentServerPolicy policy
+    $iamRolePolicyParams = @{ 
+        'RoleName'                   = $iamRole.RoleName;
+        'PolicyArn'                  = 'arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy';
+    }
+    $iamRolePolicy = Register-IAMRolePolicy @iamRolePolicyParams @session
+    $iamRolePolicy
+
+    # Attach AmazonSSMManagedInstanceCore policy
+    $iamRolePolicyParams = @{ 
+        'RoleName'                   = $iamRole.RoleName;
+        'PolicyArn'                  = 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore';
+    }
+    $iamRolePolicy = Register-IAMRolePolicy @iamRolePolicyParams @session
+    $iamRolePolicy
+
+    # Attach AmazonSSMDirectoryServiceAccess policy
+    $iamRolePolicyParams = @{ 
+        'RoleName'                   = $iamRole.RoleName;
+        'PolicyArn'                  = 'arn:aws:iam::aws:policy/AmazonSSMDirectoryServiceAccess';
     }
     $iamRolePolicy = Register-IAMRolePolicy @iamRolePolicyParams @session
     $iamRolePolicy
@@ -742,7 +767,7 @@ echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/e
         'ManagedScaling_MaximumScalingStepSize'                 = 1;
         'ManagedScaling_MinimumScalingStepSize'                 = 1;
         'ManagedScaling_Status'                                 = "DISABLED";
-        'ManagedScaling_TargetCapacity'                         = 2;
+        'ManagedScaling_TargetCapacity'                         = 1;
         'Tag'                                                   = $nameTag,$serviceTag,$managementTag,$environmentTag;
     }
     $ecsCapacityProvider = New-ECSCapacityProvider @ecsCapacityProviderParams @session
